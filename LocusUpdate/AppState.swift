@@ -13,7 +13,7 @@ final class AppState: ObservableObject {
     @Published var isChecking = false
     @Published var lastScanDate: Date?
     @Published var lastCheckDate: Date?
-    @Published var menuBarLabel: String = "LU"
+    @Published var menuBarLabel: String = "✓"
 
     let preferences: AppPreferences
 
@@ -23,14 +23,41 @@ final class AppState: ObservableObject {
     private var didStartBackground = false
     private var cancellables = Set<AnyCancellable>()
 
+    private static let knownOutdatedKey = "locusupdate.knownOutdatedBundleIDs"
+
     init(preferences: AppPreferences = .shared) {
         self.preferences = preferences
+        knownOutdatedIDs = Set(UserDefaults.standard.stringArray(forKey: Self.knownOutdatedKey) ?? [])
         refreshMenuBarLabel()
+
         preferences.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
                 self?.refreshMenuBarLabel()
+            }
+            .store(in: &cancellables)
+
+        // Restart timed scan when interval changes (0 = off, poll every 60s for re-enable).
+        preferences.$scanIntervalMinutes
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, self.didStartBackground else { return }
+                self.startBackgroundLoop()
+            }
+            .store(in: &cancellables)
+
+        preferences.$notificationsEnabled
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] enabled in
+                if enabled {
+                    self?.didRequestNotificationAuth = false
+                    self?.requestNotificationPermissionIfNeeded()
+                }
             }
             .store(in: &cancellables)
     }
@@ -56,6 +83,7 @@ final class AppState: ObservableObject {
                 guard let self else { return }
                 let minutes = max(0, self.preferences.scanIntervalMinutes)
                 if minutes <= 0 {
+                    // Idle poll so turning the interval back on is picked up promptly.
                     try? await Task.sleep(nanoseconds: 60_000_000_000)
                     continue
                 }
@@ -153,10 +181,18 @@ final class AppState: ObservableObject {
         refreshMenuBarLabel()
     }
 
+    func clearDetectionCache() {
+        DetectionCache().save([:])
+    }
+
     func requestNotificationPermissionIfNeeded() {
         guard preferences.notificationsEnabled, !didRequestNotificationAuth else { return }
         didRequestNotificationAuth = true
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    private func persistKnownOutdated() {
+        UserDefaults.standard.set(Array(knownOutdatedIDs).sorted(), forKey: Self.knownOutdatedKey)
     }
 
     private func maybeNotifyNewOutdated() async {
@@ -165,6 +201,7 @@ final class AppState: ObservableObject {
         let current = Set(outdatedStatuses.map(\.app.bundleIdentifier))
         let newly = current.subtracting(knownOutdatedIDs)
         knownOutdatedIDs = current
+        persistKnownOutdated()
         guard !newly.isEmpty else { return }
 
         let names = outdatedStatuses

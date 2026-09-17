@@ -3,15 +3,20 @@ import Foundation
 public struct UpdateChecker: Sendable {
     public var networkChecksEnabled: Bool
     public var useCache: Bool
+    public var cache: DetectionCache
 
-    public init(networkChecksEnabled: Bool = true, useCache: Bool = true) {
+    public init(
+        networkChecksEnabled: Bool = true,
+        useCache: Bool = true,
+        cache: DetectionCache = DetectionCache()
+    ) {
         self.networkChecksEnabled = networkChecksEnabled
         self.useCache = useCache
+        self.cache = cache
     }
 
-    /// For each installed app: cache hit → reuse; else Sparkle → GitHub → vendor; then semver outdated check.
+    /// For each installed app: cache hit (unchanged fingerprint) → reuse; else Sparkle → GitHub → vendor; then semver outdated check. Persists new probe results when caching is on.
     public func evaluate(apps: [InstalledApp], limit: Int = 40) async -> [AppVersionStatus] {
-        let cache = DetectionCache()
         var entries = useCache ? cache.load() : [:]
         var out: [AppVersionStatus] = []
         var dirty = false

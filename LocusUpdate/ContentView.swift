@@ -155,8 +155,9 @@ struct ContentView: View {
                 .padding()
                 Divider()
                 SettingsView(preferences: appState.preferences)
+                    .environmentObject(appState)
             }
-            .frame(width: 520, height: 520)
+            .frame(width: 540, height: 560)
         }
         .task {
             appState.ensureBackgroundLoopStarted()

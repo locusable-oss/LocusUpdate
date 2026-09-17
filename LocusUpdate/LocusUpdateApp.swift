@@ -29,6 +29,7 @@ struct LocusUpdateApp: App {
                 .environmentObject(appState)
         }
 
+        // Menu bar summary: "LU ✓" when clean, "LU N" when N outdated apps.
         MenuBarExtra {
             menuBarContent
                 .onAppear { appState.ensureBackgroundLoopStarted() }
@@ -43,6 +44,10 @@ struct LocusUpdateApp: App {
         Text(appState.outdatedCount == 0
              ? "All checked apps up to date"
              : "\(appState.outdatedCount) outdated")
+        if let check = appState.lastCheckDate {
+            Text("Checked \(check, style: .relative) ago")
+                .font(.caption)
+        }
         Divider()
         ForEach(appState.outdatedStatuses.prefix(12)) { status in
             Button("\(status.app.name) \(status.app.shortVersion) → \(status.remote?.version ?? "?")") {
@@ -64,6 +69,9 @@ struct LocusUpdateApp: App {
                 window.makeKeyAndOrderFront(nil)
                 break
             }
+        }
+        SettingsLink {
+            Text("Settings…")
         }
         Divider()
         Button("Quit LocusUpdate") {

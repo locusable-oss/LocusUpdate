@@ -9,7 +9,7 @@ options:
 settings:
   base:
     MARKETING_VERSION: "0.2.0"
-    CURRENT_PROJECT_VERSION: "2"
+    CURRENT_PROJECT_VERSION: "3"
     PRODUCT_BUNDLE_IDENTIFIER: studio.locusable.LocusUpdate
     GENERATE_INFOPLIST_FILE: YES
     INFOPLIST_KEY_CFBundleDisplayName: LocusUpdate

@@ -2,8 +2,17 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var preferences: AppPreferences
+    @EnvironmentObject private var appState: AppState
     @State private var pathsText: String = ""
     @State private var newIgnoreID: String = ""
+    @State private var cacheClearedFlash = false
+
+    private static let intervalFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .short
+        return f
+    }()
 
     var body: some View {
         Form {
@@ -21,13 +30,7 @@ struct SettingsView: View {
                     }
                     Spacer()
                     Button("Apply paths") {
-                        let lines = pathsText
-                            .split(whereSeparator: \.isNewline)
-                            .map { $0.trimmingCharacters(in: .whitespaces) }
-                            .filter { !$0.isEmpty }
-                        if !lines.isEmpty {
-                            preferences.scanPaths = lines
-                        }
+                        applyPaths()
                     }
                     .keyboardShortcut(.defaultAction)
                 }
@@ -43,23 +46,51 @@ struct SettingsView: View {
                         Text("Background scan every \(preferences.scanIntervalMinutes) min")
                     }
                 }
-                Text("0 disables timed background scans. Manual Rescan / Check still work.")
+                Text("0 disables timed background scans. Manual Rescan / Check still work. Changing the interval restarts the timer.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                if let scan = appState.lastScanDate {
+                    Text("Last scan: \(Self.intervalFormatter.string(from: scan))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if let check = appState.lastCheckDate {
+                    Text("Last check: \(Self.intervalFormatter.string(from: check))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("Network") {
                 Toggle("Allow network version checks", isOn: $preferences.networkChecksEnabled)
-                Text("When off, LocusUpdate uses the local detection cache only and does not contact Sparkle/GitHub/vendor URLs.")
+                Text("When off, LocusUpdate reuses the local detection cache and does not contact Sparkle/GitHub/vendor URLs for new probes.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             Section("Notifications") {
                 Toggle("Notify when outdated apps are found", isOn: $preferences.notificationsEnabled)
-                Text("Uses the macOS notification center. You can also disable LocusUpdate alerts in System Settings.")
+                Text("Uses the macOS notification center. Authorization is requested once when enabled. You can also silence LocusUpdate in System Settings → Notifications.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Detection cache") {
+                Text("Cached probe results live in Application Support and skip re-probes when bundle ID, version, and Info.plist mtime are unchanged.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Button(cacheClearedFlash ? "Cache cleared" : "Clear detection cache") {
+                        appState.clearDetectionCache()
+                        cacheClearedFlash = true
+                        Task {
+                            try? await Task.sleep(nanoseconds: 1_500_000_000)
+                            cacheClearedFlash = false
+                        }
+                    }
+                    Spacer()
+                }
             }
 
             Section("Ignore list") {
@@ -115,12 +146,31 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Section("MVP scope") {
+                Text("LocusUpdate detects outdated apps and opens the publisher’s update page in your browser. It never downloads or replaces binaries, and does not manage Homebrew/CLI packages.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Locusable Studio · GPL-3.0")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
         }
         .padding(20)
-        .frame(minWidth: 480, minHeight: 420)
+        .frame(minWidth: 480, minHeight: 480)
         .onAppear {
             pathsText = preferences.scanPaths.joined(separator: "\n")
         }
         .navigationTitle("LocusUpdate Settings")
+    }
+
+    private func applyPaths() {
+        let lines = pathsText
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        if !lines.isEmpty {
+            preferences.scanPaths = lines
+        }
     }
 }
