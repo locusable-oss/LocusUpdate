@@ -1,0 +1,140 @@
+name: Release macOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag e.g. v2026.9.18 (empty = Asia/Shanghai today)"
+        required: false
+        default: ""
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            V="${GITHUB_REF_NAME}"
+          elif [ -n "${{ github.event.inputs.version }}" ]; then
+            V="${{ github.event.inputs.version }}"
+          else
+            V="v$(TZ=Asia/Shanghai date +%-Y.%-m.%-d)"
+          fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -z "${{ github.event.inputs.version }}" ]; then
+            N=0
+            CAND="$V"
+            while git ls-remote --tags origin "refs/tags/${CAND}" | grep -q .; do
+              N=$((N+1))
+              CAND="${V}.${N}"
+            done
+            V="$CAND"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Using version $V"
+
+      - name: Select Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls /Applications | grep -i Xcode || true
+          for c in \
+            "/Applications/Xcode_16.4.app" \
+            "/Applications/Xcode_16.3.app" \
+            "/Applications/Xcode_16.2.app" \
+            "/Applications/Xcode_16.1.app" \
+            "/Applications/Xcode_16.0.app" \
+            "/Applications/Xcode_16.app" \
+            "/Applications/Xcode.app"
+          do
+            if [ -d "$c" ]; then
+              sudo xcode-select -s "$c"
+              echo "Using $c"
+              xcodebuild -version
+              exit 0
+            fi
+          done
+          echo "No Xcode 16+ found; will force objectVersion after generate"
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate, build, make DMG (unsigned)
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${{ steps.ver.outputs.version }}"
+          xcodegen generate
+          if [ -f LocusUpdate.xcodeproj/project.pbxproj ]; then
+            /usr/bin/sed -i '' -E 's/objectVersion = [0-9]+;/objectVersion = 56;/' LocusUpdate.xcodeproj/project.pbxproj
+          fi
+          xcodebuild -project LocusUpdate.xcodeproj -scheme LocusUpdate -configuration Release \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGN_IDENTITY="-" CODE_SIGNING_ALLOWED=YES \
+            build
+          APP=$(find build/DerivedData/Build/Products -name 'LocusUpdate.app' -type d | head -1)
+          test -n "$APP"
+          STAGE="build/dmg-stage"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          ditto "$APP" "$STAGE/LocusUpdate.app"
+          ln -sf /Applications "$STAGE/Applications"
+          DMG="LocusUpdate-${V}-macos-unsigned.dmg"
+          rm -f "$DMG"
+          hdiutil create -volname "LocusUpdate" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+          test -f "$DMG"
+          echo "binary=$DMG" >> "$GITHUB_OUTPUT"
+          ls -la "$DMG"
+
+      - name: Source zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${{ steps.ver.outputs.version }}"
+          zip -r "LocusUpdate-${V}-source.zip" \
+            ACCEPTANCE.md COPYRIGHT LICENSE Makefile Package.swift README.md project.yml VERSION \
+            LocusUpdate Sources Tests scripts \
+            -x '*.xcuserstate' -x '.DS_Store'
+          test -f "LocusUpdate-${V}-source.zip"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${{ steps.ver.outputs.version }}"
+          NOTES=$(cat <<MD
+          ## ${V}
+
+          LocusUpdate macOS app-update checker (unsigned / not notarized).
+
+          - Source zip (GPL-3.0)
+          - Unsigned macOS installer DMG
+          MD
+          )
+          ASSETS=("LocusUpdate-${V}-source.zip")
+          if [ -f "LocusUpdate-${V}-macos-unsigned.dmg" ]; then
+            ASSETS+=("LocusUpdate-${V}-macos-unsigned.dmg")
+          fi
+          if gh release view "$V" >/dev/null 2>&1; then
+            gh release upload "$V" "${ASSETS[@]}" --clobber
+          else
+            gh release create "$V" --title "$V" --notes "$NOTES" "${ASSETS[@]}"
+          fi

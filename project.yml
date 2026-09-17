@@ -25,6 +25,8 @@ targets:
         excludes:
           - "**/*.md"
       - path: Sources/LocusUpdateCore
+    resources:
+      - path: LocusUpdate/Resources
     settings:
       base:
         PRODUCT_NAME: LocusUpdate
@@ -32,3 +34,4 @@ targets:
         # Unsigned local Debug builds are expected; see ACCEPTANCE.md
         CODE_SIGN_IDENTITY: "-"
         CODE_SIGNING_ALLOWED: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
