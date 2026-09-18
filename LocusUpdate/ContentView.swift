@@ -145,19 +145,22 @@ struct ContentView: View {
         .padding(16)
         .sheet(isPresented: $showSettings) {
             VStack(alignment: .leading, spacing: 0) {
-                HStack {
+                HStack(alignment: .center, spacing: 12) {
                     Text("Settings")
                         .font(.headline)
-                    Spacer()
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     Button("Done") { showSettings = false }
                         .keyboardShortcut(.cancelAction)
+                        .fixedSize()
                 }
-                .padding()
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
                 Divider()
                 SettingsView(preferences: appState.preferences)
                     .environmentObject(appState)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
-            .frame(width: 540, height: 560)
+            .frame(width: 540, height: 620)
         }
         .task {
             appState.ensureBackgroundLoopStarted()

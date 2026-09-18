@@ -27,6 +27,7 @@ struct LocusUpdateApp: App {
         Settings {
             SettingsView(preferences: appState.preferences)
                 .environmentObject(appState)
+                .frame(minWidth: 520, idealWidth: 540, minHeight: 480, idealHeight: 560)
         }
 
         // Menu bar summary: "LU ✓" when clean, "LU N" when N outdated apps.
