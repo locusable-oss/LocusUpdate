@@ -114,9 +114,17 @@ public struct DetectionCache: Sendable {
         try? data.write(to: fileURL, options: [.atomic])
     }
 
+    /// Identity is bundle id + path so two copies of the same app do not share one cache slot.
+    /// Falls back to a legacy bundle-id key written before that split.
+    public static func cacheKey(for app: InstalledApp) -> String {
+        app.id
+    }
+
     public func cachedStatus(for app: InstalledApp, entries: [String: Entry]) -> AppVersionStatus? {
         let mtime = Self.contentModTime(for: app.bundleURL)
-        guard let entry = entries[app.bundleIdentifier],
+        let entry = entries[Self.cacheKey(for: app)] ?? entries[app.bundleIdentifier]
+        guard let entry,
+              entry.bundleID == app.bundleIdentifier,
               entry.shortVersion == app.shortVersion,
               abs(entry.contentModTime - mtime) < 0.5 else {
             return nil
@@ -126,6 +134,10 @@ public struct DetectionCache: Sendable {
 
     public func upsert(status: AppVersionStatus, into entries: inout [String: Entry]) {
         let mtime = Self.contentModTime(for: status.app.bundleURL)
-        entries[status.app.bundleIdentifier] = Entry.from(status: status, contentModTime: mtime)
+        let key = Self.cacheKey(for: status.app)
+        entries[key] = Entry.from(status: status, contentModTime: mtime)
+        if key != status.app.bundleIdentifier {
+            entries.removeValue(forKey: status.app.bundleIdentifier)
+        }
     }
 }

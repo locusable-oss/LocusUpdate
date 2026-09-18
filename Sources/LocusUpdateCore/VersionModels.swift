@@ -17,6 +17,18 @@ public struct RemoteVersion: Sendable, Equatable {
         self.source = source
         self.infoURL = infoURL
     }
+
+    /// Browser-openable page. Rejects `file:`, custom schemes, and host-less URLs so a crafted feed cannot hand the shell a local path.
+    public var browserURL: URL? {
+        guard let infoURL else { return nil }
+        return Self.httpURL(infoURL)
+    }
+
+    public static func httpURL(_ url: URL) -> URL? {
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return nil }
+        guard let host = url.host, !host.isEmpty else { return nil }
+        return url
+    }
 }
 
 public struct AppVersionStatus: Identifiable, Sendable, Equatable {

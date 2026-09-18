@@ -15,13 +15,6 @@ public struct AppScanner: Sendable {
         }
     }
 
-    /// Convenience: build scanner from preference path strings (tilde expanded).
-    public init(pathStrings: [String]) {
-        self.searchRoots = pathStrings.map {
-            URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true)
-        }
-    }
-
     /// Scans configured roots for `.app` bundles (non-recursive into other apps' Contents).
     public func scanInstalledApps() -> [InstalledApp] {
         let fm = FileManager.default

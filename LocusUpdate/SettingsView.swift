@@ -6,7 +6,9 @@ struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @State private var pathsText: String = ""
     @State private var newIgnoreID: String = ""
+    @State private var pathsHint: String = ""
     @State private var cacheClearedFlash = false
+    @State private var cacheFlashTask: Task<Void, Never>?
 
     private static let intervalFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -44,6 +46,7 @@ struct SettingsView: View {
                         Button("Reset to defaults") {
                             preferences.scanPaths = AppPreferences.defaultScanPaths()
                             pathsText = preferences.scanPaths.joined(separator: "\n")
+                            pathsHint = "Restored the default scan paths."
                         }
                         .fixedSize()
                         Spacer(minLength: 12)
@@ -52,6 +55,9 @@ struct SettingsView: View {
                         }
                         .keyboardShortcut(.defaultAction)
                         .fixedSize()
+                    }
+                    if !pathsHint.isEmpty {
+                        caption(pathsHint)
                     }
                 }
 
@@ -62,13 +68,14 @@ struct SettingsView: View {
                             .multilineTextAlignment(.leading)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Stepper(
-                            "",
+                            scanIntervalTitle,
                             value: $preferences.scanIntervalMinutes,
                             in: 0...(24 * 60),
                             step: 15
                         )
                         .labelsHidden()
                         .fixedSize()
+                        .accessibilityLabel(scanIntervalTitle)
                     }
                     caption("0 disables timed background scans. Manual Rescan / Check still work. Changing the interval restarts the timer.")
                 }
@@ -108,13 +115,20 @@ struct SettingsView: View {
                         Button(cacheClearedFlash ? "Cache cleared" : "Clear detection cache") {
                             appState.clearDetectionCache()
                             cacheClearedFlash = true
-                            Task {
-                                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                            cacheFlashTask?.cancel()
+                            cacheFlashTask = Task {
+                                try? await Task.sleep(nanoseconds: 1_800_000_000)
+                                if Task.isCancelled { return }
                                 cacheClearedFlash = false
                             }
                         }
                         .fixedSize()
                         Spacer(minLength: 0)
+                    }
+                    if cacheClearedFlash {
+                        caption(preferences.networkChecksEnabled
+                            ? "Saved probe results were removed. The next check contacts Sparkle, GitHub, or the vendor again."
+                            : "Saved probe results were removed. Network checks are still off, so nothing new will be fetched.")
                     }
                 }
             }
@@ -143,13 +157,10 @@ struct SettingsView: View {
                     TextField("bundle.id.to.ignore", text: $newIgnoreID)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: .infinity)
-                    Button("Add") {
-                        let id = newIgnoreID.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !id.isEmpty else { return }
-                        preferences.ignore(bundleID: id)
-                        newIgnoreID = ""
-                    }
-                    .fixedSize()
+                        .onSubmit { addIgnore() }
+                    Button("Add") { addIgnore() }
+                        .disabled(newIgnoreID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .fixedSize()
                 }
             }
 
@@ -210,13 +221,37 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private func addIgnore() {
+        let id = newIgnoreID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return }
+        preferences.ignore(bundleID: id)
+        newIgnoreID = ""
+    }
+
     private func applyPaths() {
         let lines = pathsText
             .split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-        if !lines.isEmpty {
-            preferences.scanPaths = lines
+        guard !lines.isEmpty else {
+            pathsHint = "Add at least one folder, or Reset to defaults."
+            return
+        }
+        preferences.scanPaths = lines
+        pathsText = lines.joined(separator: "\n")
+        let missing = lines.filter { line in
+            let path = (line as NSString).expandingTildeInPath
+            var isDir: ObjCBool = false
+            return !FileManager.default.fileExists(atPath: path, isDirectory: &isDir) || !isDir.boolValue
+        }
+        if missing.isEmpty {
+            pathsHint = "Scan paths saved. Rescan to use them."
+        } else if missing.count == lines.count {
+            pathsHint = "Saved, but none of these paths are folders yet. Rescan will skip them."
+        } else {
+            pathsHint = missing.count == 1
+                ? "Saved. 1 path is not a folder and will be skipped."
+                : "Saved. \(missing.count) paths are not folders and will be skipped."
         }
     }
 }

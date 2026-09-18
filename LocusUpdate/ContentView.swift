@@ -25,124 +25,54 @@ struct ContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text("LocusUpdate")
                     .font(.title2.weight(.semibold))
-                Spacer()
+                    .fixedSize()
+                Spacer(minLength: 12)
+                Text(summaryLine)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.trailing)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+
+            HStack(alignment: .center, spacing: 10) {
                 Toggle("Outdated only", isOn: $onlyOutdated)
                     .toggleStyle(.checkbox)
+                    .fixedSize()
                 Toggle("Hide ignored", isOn: $hideIgnored)
                     .toggleStyle(.checkbox)
+                    .fixedSize()
+                Spacer(minLength: 8)
                 Button("Settings…") { showSettings = true }
+                    .fixedSize()
                 Button(appState.isScanning ? "Scanning…" : "Rescan") {
                     Task { await appState.rescan() }
                 }
-                .disabled(appState.isScanning || appState.isChecking)
+                .disabled(appState.isWorking)
+                .fixedSize()
                 Button(appState.isChecking ? "Checking…" : "Check updates") {
                     Task { await appState.checkUpdates() }
                 }
-                .disabled(appState.isScanning || appState.isChecking || appState.apps.isEmpty)
+                .disabled(appState.isWorking || appState.apps.isEmpty)
+                .fixedSize()
             }
 
-            Text(summaryLine)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Table(visible, selection: $selection) {
-                TableColumn("Name") { (row: AppVersionStatus) in
-                    HStack(spacing: 6) {
-                        Text(row.app.name)
-                        if appState.preferences.pinnedVersion(for: row.app.bundleIdentifier) != nil {
-                            Text("Pinned")
-                                .font(.caption2.weight(.semibold))
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 1)
-                                .background(.yellow.opacity(0.25))
-                                .clipShape(RoundedRectangle(cornerRadius: 3))
-                        }
-                        if appState.preferences.isIgnored(bundleID: row.app.bundleIdentifier) {
-                            Text("Ignored")
-                                .font(.caption2.weight(.semibold))
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 1)
-                                .background(.secondary.opacity(0.2))
-                                .clipShape(RoundedRectangle(cornerRadius: 3))
-                        }
-                    }
-                }
-                .width(min: 120, ideal: 160)
-                TableColumn("Local") { (row: AppVersionStatus) in
-                    Text(row.app.shortVersion)
-                }
-                .width(min: 60, ideal: 80)
-                TableColumn("Latest") { (row: AppVersionStatus) in
-                    Text(row.remote?.version ?? "—")
-                }
-                .width(min: 60, ideal: 80)
-                TableColumn("Source") { (row: AppVersionStatus) in
-                    Text(sourceLabel(row))
-                        .font(.caption)
-                }
-                .width(min: 80, ideal: 110)
-                TableColumn("Update") { (row: AppVersionStatus) in
-                    Button("Open") {
-                        appState.openUpdatePage(for: row)
-                    }
-                    .disabled(row.remote?.infoURL == nil)
-                    .help(row.remote?.infoURL?.absoluteString ?? "No download/update URL")
-                }
-                .width(70)
-                TableColumn("Bundle ID") { (row: AppVersionStatus) in
-                    Text(row.app.bundleIdentifier)
-                        .font(.system(.body, design: .monospaced))
-                }
-                .width(min: 140, ideal: 220)
-            }
-            .contextMenu(forSelectionType: AppVersionStatus.ID.self) { ids in
-                contextMenu(for: ids)
-            }
-
-            HStack {
-                if let sel = selectedStatus {
-                    Button("Open Update Page") {
-                        appState.openUpdatePage(for: sel)
-                    }
-                    .disabled(sel.remote?.infoURL == nil)
-
-                    if appState.preferences.isIgnored(bundleID: sel.app.bundleIdentifier) {
-                        Button("Unignore") {
-                            appState.unignoreApp(bundleID: sel.app.bundleIdentifier)
-                        }
-                    } else {
-                        Button("Ignore") {
-                            appState.ignoreApp(sel)
-                        }
-                    }
-
-                    if appState.preferences.pinnedVersion(for: sel.app.bundleIdentifier) != nil {
-                        Button("Unpin") {
-                            appState.unpinApp(bundleID: sel.app.bundleIdentifier)
-                        }
-                    } else {
-                        Button("Pin version") {
-                            appState.pinApp(sel)
-                        }
-                    }
-
-                    if let pinned = appState.preferences.pinnedVersion(for: sel.app.bundleIdentifier) {
-                        Text("Pinned at \(pinned)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+            Group {
+                if visible.isEmpty {
+                    emptyState
                 } else {
-                    Text("Select a row for Ignore / Pin / Open Update. Opening always uses the browser — never silent install.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    appTable
                 }
-                Spacer()
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            actionBar
         }
         .padding(16)
+        .frame(minWidth: 720, minHeight: 420)
         .sheet(isPresented: $showSettings) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .center, spacing: 12) {
@@ -162,12 +92,165 @@ struct ContentView: View {
             }
             .frame(width: 540, height: 620)
         }
-        .task {
-            appState.ensureBackgroundLoopStarted()
+    }
+
+    private var appTable: some View {
+        Table(visible, selection: $selection) {
+            TableColumn("Name") { (row: AppVersionStatus) in
+                HStack(spacing: 6) {
+                    Text(row.app.name)
+                        .lineLimit(1)
+                    if appState.preferences.pinnedVersion(for: row.app.bundleIdentifier) != nil {
+                        badge("Pinned", fill: Color.yellow.opacity(0.28))
+                    }
+                    if appState.preferences.isIgnored(bundleID: row.app.bundleIdentifier) {
+                        badge("Ignored", fill: Color.secondary.opacity(0.18))
+                    }
+                }
+            }
+            .width(min: 120, ideal: 180)
+            TableColumn("Local") { (row: AppVersionStatus) in
+                Text(row.app.shortVersion)
+                    .lineLimit(1)
+            }
+            .width(min: 60, ideal: 80)
+            TableColumn("Latest") { (row: AppVersionStatus) in
+                Text(row.remote?.version ?? "—")
+                    .lineLimit(1)
+                    .foregroundStyle(appState.preferences.isEffectivelyOutdated(row) ? Color.orange : Color.primary)
+            }
+            .width(min: 60, ideal: 90)
+            TableColumn("Source") { (row: AppVersionStatus) in
+                Text(sourceLabel(row))
+                    .font(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .width(min: 90, ideal: 120)
+            TableColumn("Update") { (row: AppVersionStatus) in
+                Button("Open") {
+                    appState.openUpdatePage(for: row)
+                }
+                .disabled(row.remote?.browserURL == nil)
+                .help(row.remote?.browserURL?.absoluteString ?? "No download/update page")
+            }
+            .width(70)
+            TableColumn("Bundle ID") { (row: AppVersionStatus) in
+                Text(row.app.bundleIdentifier)
+                    .font(.system(.body, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .width(min: 140, ideal: 220)
+        }
+        .contextMenu(forSelectionType: AppVersionStatus.ID.self) { ids in
+            contextMenu(for: ids)
         }
     }
 
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            if appState.isScanning && appState.apps.isEmpty {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Scanning installed apps…")
+                    .font(.headline)
+                Text("Looking one level under each scan path for .app bundles.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if appState.apps.isEmpty {
+                Text("No apps found")
+                    .font(.headline)
+                Text("Add scan paths in Settings, then Rescan. Only .app bundles directly inside those folders are listed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 420)
+            } else if onlyOutdated {
+                Text("No outdated apps")
+                    .font(.headline)
+                Text("Uncheck “Outdated only” to see every scanned app, including ones that are current or not checked yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 440)
+            } else {
+                Text("Nothing to show")
+                    .font(.headline)
+                Text("Ignored apps are hidden. Uncheck “Hide ignored”, or remove ids in Settings.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 420)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
+    }
+
+    private var actionBar: some View {
+        HStack(alignment: .center, spacing: 8) {
+            if let sel = selectedStatus {
+                Button("Open Update Page") {
+                    appState.openUpdatePage(for: sel)
+                }
+                .disabled(sel.remote?.browserURL == nil)
+                .fixedSize()
+
+                if appState.preferences.isIgnored(bundleID: sel.app.bundleIdentifier) {
+                    Button("Unignore") {
+                        appState.unignoreApp(bundleID: sel.app.bundleIdentifier)
+                    }
+                    .fixedSize()
+                } else {
+                    Button("Ignore") {
+                        appState.ignoreApp(sel)
+                    }
+                    .fixedSize()
+                }
+
+                if appState.preferences.pinnedVersion(for: sel.app.bundleIdentifier) != nil {
+                    Button("Unpin") {
+                        appState.unpinApp(bundleID: sel.app.bundleIdentifier)
+                    }
+                    .fixedSize()
+                } else {
+                    Button("Pin version") {
+                        appState.pinApp(sel)
+                    }
+                    .fixedSize()
+                }
+
+                if let pinned = appState.preferences.pinnedVersion(for: sel.app.bundleIdentifier) {
+                    Text("Pinned at \(pinned)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            } else {
+                Text("Select a row for Ignore, Pin, or Open Update. Opening always uses the browser — never a silent install.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func badge(_ title: String, fill: Color) -> some View {
+        Text(title)
+            .font(.caption2.weight(.semibold))
+            .lineLimit(1)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(fill)
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+    }
+
     private var summaryLine: String {
+        if appState.isScanning { return "Scanning installed apps…" }
+        if appState.isChecking { return "Checking for updates…" }
         let outdated = appState.outdatedCount
         let ignored = appState.preferences.ignoredBundleIDs.count
         let pinned = appState.preferences.pinnedVersions.count
@@ -175,10 +258,18 @@ struct ContentView: View {
     }
 
     private func sourceLabel(_ row: AppVersionStatus) -> String {
-        if let pinned = appState.preferences.pinnedVersion(for: row.app.bundleIdentifier) {
-            return "pinned \(pinned)"
+        switch row.remote?.source {
+        case .sparkle:
+            return "Sparkle"
+        case .githubReleases:
+            return "GitHub"
+        case .vendorPage:
+            return "Vendor"
+        case .unknown:
+            return row.note ?? "Unknown"
+        case nil:
+            return row.note ?? "—"
         }
-        return row.remote?.source.rawValue ?? (row.note ?? "—")
     }
 
     @ViewBuilder
@@ -188,7 +279,7 @@ struct ContentView: View {
             Button("Open Update Page") {
                 appState.openUpdatePage(for: first)
             }
-            .disabled(first.remote?.infoURL == nil)
+            .disabled(first.remote?.browserURL == nil)
             Divider()
             if appState.preferences.isIgnored(bundleID: first.app.bundleIdentifier) {
                 Button("Unignore") {

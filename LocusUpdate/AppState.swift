@@ -11,13 +11,18 @@ final class AppState: ObservableObject {
     @Published var statuses: [AppVersionStatus] = []
     @Published var isScanning = false
     @Published var isChecking = false
+    @Published private(set) var pendingWork = 0
     @Published var lastScanDate: Date?
     @Published var lastCheckDate: Date?
     @Published var menuBarLabel: String = "✓"
 
     let preferences: AppPreferences
 
+    /// True while a scan or check is running, or waiting behind one. Drives button disable.
+    var isWorking: Bool { pendingWork > 0 || isScanning || isChecking }
+
     private var backgroundTask: Task<Void, Never>?
+    private var workTail: Task<Void, Never>?
     private var knownOutdatedIDs: Set<String> = []
     private var didRequestNotificationAuth = false
     private var didStartBackground = false
@@ -95,33 +100,54 @@ final class AppState: ObservableObject {
         }
     }
 
-    func stopBackgroundLoop() {
-        backgroundTask?.cancel()
-        backgroundTask = nil
-        didStartBackground = false
-    }
-
     func runScanAndCheck(reason: String) async {
-        await rescan()
-        await checkUpdates()
-        refreshMenuBarLabel()
-        if reason == "timer" || reason == "launch" {
-            await maybeNotifyNewOutdated()
+        await enqueue { state in
+            await state.performRescan()
+            await state.performCheck()
+            state.refreshMenuBarLabel()
+            if reason == "timer" || reason == "launch" {
+                await state.maybeNotifyNewOutdated()
+            }
         }
     }
 
     func rescan() async {
+        await enqueue { state in
+            await state.performRescan()
+        }
+    }
+
+    func checkUpdates() async {
+        await enqueue { state in
+            await state.performCheck()
+        }
+    }
+
+    /// One scan/check body at a time. A timer must not overwrite `apps` while a manual run is in flight.
+    private func enqueue(_ body: @escaping @MainActor (AppState) async -> Void) async {
+        pendingWork += 1
+        defer { pendingWork = max(0, pendingWork - 1) }
+        let previous = workTail
+        let next = Task { @MainActor in
+            await previous?.value
+            await body(self)
+        }
+        workTail = next
+        await next.value
+    }
+
+    private func performRescan() async {
         guard !isScanning else { return }
         isScanning = true
         defer { isScanning = false }
         let roots = preferences.scanRootURLs()
         let scanner = AppScanner(searchRoots: roots)
+        let previous = indexByIdentity(statuses)
         apps = await Task.detached(priority: .userInitiated) {
             scanner.scanInstalledApps()
         }.value
-        let byID = Dictionary(uniqueKeysWithValues: statuses.map { ($0.app.bundleIdentifier, $0) })
         statuses = apps.map { app in
-            if let prev = byID[app.bundleIdentifier], prev.app.shortVersion == app.shortVersion {
+            if let prev = previous[app.id], prev.app.shortVersion == app.shortVersion {
                 return AppVersionStatus(app: app, remote: prev.remote, isOutdated: prev.isOutdated, note: prev.note)
             }
             return AppVersionStatus(app: app, remote: nil, isOutdated: false)
@@ -130,24 +156,43 @@ final class AppState: ObservableObject {
         refreshMenuBarLabel()
     }
 
-    func checkUpdates() async {
+    private func performCheck() async {
         guard !isChecking else { return }
         isChecking = true
         defer { isChecking = false }
+        let previous = indexByIdentity(statuses)
         let snapshot = apps.filter { !preferences.isIgnored(bundleID: $0.bundleIdentifier) }
         let network = preferences.networkChecksEnabled
         let checker = UpdateChecker(networkChecksEnabled: network, useCache: true)
         let evaluated = await checker.evaluate(apps: snapshot, limit: 80)
-        let byID = Dictionary(uniqueKeysWithValues: evaluated.map { ($0.app.bundleIdentifier, $0) })
+        let byID = indexByIdentity(evaluated)
         statuses = apps.map { app in
-            if let e = byID[app.bundleIdentifier] {
-                return e
+            if let evaluatedStatus = byID[app.id] {
+                return evaluatedStatus
             }
-            let note = preferences.isIgnored(bundleID: app.bundleIdentifier) ? "ignored" : nil
-            return AppVersionStatus(app: app, remote: nil, isOutdated: false, note: note)
+            if preferences.isIgnored(bundleID: app.bundleIdentifier) {
+                return AppVersionStatus(app: app, remote: nil, isOutdated: false, note: "ignored")
+            }
+            // Past this round's network budget. Keep the last result instead of wiping it.
+            if let prev = previous[app.id],
+               prev.app.shortVersion == app.shortVersion,
+               (prev.remote != nil || prev.note != nil) {
+                return AppVersionStatus(app: app, remote: prev.remote, isOutdated: prev.isOutdated, note: prev.note)
+            }
+            return AppVersionStatus(app: app, remote: nil, isOutdated: false, note: "not checked yet")
         }
         lastCheckDate = Date()
         refreshMenuBarLabel()
+    }
+
+    /// Last-wins map. `Dictionary(uniqueKeysWithValues:)` traps when two bundles share an id.
+    private func indexByIdentity(_ rows: [AppVersionStatus]) -> [String: AppVersionStatus] {
+        var map: [String: AppVersionStatus] = [:]
+        map.reserveCapacity(rows.count)
+        for row in rows {
+            map[row.app.id] = row
+        }
+        return map
     }
 
     func refreshMenuBarLabel() {
@@ -156,7 +201,7 @@ final class AppState: ObservableObject {
     }
 
     func openUpdatePage(for status: AppVersionStatus) {
-        guard let url = status.remote?.infoURL else { return }
+        guard let url = status.remote?.browserURL else { return }
         NSWorkspace.shared.open(url)
     }
 
@@ -209,10 +254,16 @@ final class AppState: ObservableObject {
             .prefix(5)
             .map(\.app.name)
         let body: String
-        if names.count == 1 {
+        if names.count == 1, newly.count == 1 {
             body = "\(names[0]) has an update available."
         } else {
-            body = "\(newly.count) apps have updates: \(names.joined(separator: ", "))."
+            let list = names.joined(separator: ", ")
+            let extra = newly.count - names.count
+            if extra > 0 {
+                body = "\(newly.count) apps have updates: \(list), and \(extra) more."
+            } else {
+                body = "\(newly.count) apps have updates: \(list)."
+            }
         }
 
         let content = UNMutableNotificationContent()

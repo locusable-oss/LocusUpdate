@@ -15,28 +15,46 @@ public struct UpdateChecker: Sendable {
         self.cache = cache
     }
 
-    /// For each installed app: cache hit (unchanged fingerprint) → reuse; else Sparkle → GitHub → vendor; then semver outdated check. Persists new probe results when caching is on.
+    /// Cache hit → reuse. Otherwise Sparkle → GitHub → vendor, then semver.
+    /// `limit` bounds network probes only. Apps with no feed are still returned.
+    /// Apps past the probe budget are omitted so the caller can keep their previous status.
     public func evaluate(apps: [InstalledApp], limit: Int = 40) async -> [AppVersionStatus] {
         var entries = useCache ? cache.load() : [:]
         var out: [AppVersionStatus] = []
         var dirty = false
+        var probes = 0
+        let budget = max(0, limit)
 
-        for app in apps.prefix(limit) {
+        for app in apps {
             if useCache, let hit = cache.cachedStatus(for: app, entries: entries) {
                 out.append(hit)
                 continue
             }
 
             if !networkChecksEnabled {
-                let status = AppVersionStatus(
+                out.append(AppVersionStatus(
                     app: app,
                     remote: nil,
                     isOutdated: false,
                     note: "network checks off"
-                )
-                out.append(status)
+                ))
                 continue
             }
+
+            if !Self.hasProbeTarget(app) {
+                let status = AppVersionStatus(app: app, remote: nil, isOutdated: false, note: "no feed mapped")
+                out.append(status)
+                if useCache {
+                    cache.upsert(status: status, into: &entries)
+                    dirty = true
+                }
+                continue
+            }
+
+            if probes >= budget {
+                continue
+            }
+            probes += 1
 
             let status = await evaluateOne(app)
             out.append(status)
@@ -50,6 +68,14 @@ public struct UpdateChecker: Sendable {
             cache.save(entries)
         }
         return out
+    }
+
+    /// Local plist read only. True when Sparkle, GitHub, or a vendor homepage can be tried.
+    static func hasProbeTarget(_ app: InstalledApp) -> Bool {
+        if SparkleProbe.feedURL(fromBundle: app.bundleURL) != nil { return true }
+        if GitHubReleasesProbe.repo(fromBundle: app.bundleURL) != nil { return true }
+        if VendorPageProbe.homepage(fromBundle: app.bundleURL) != nil { return true }
+        return false
     }
 
     private func evaluateOne(_ app: InstalledApp) async -> AppVersionStatus {

@@ -6,7 +6,7 @@ struct LocusUpdateApp: App {
     @StateObject private var appState = AppState()
 
     var body: some Scene {
-        WindowGroup("LocusUpdate") {
+        WindowGroup("LocusUpdate", id: "main") {
             ContentView()
                 .environmentObject(appState)
                 .onAppear {
@@ -32,21 +32,32 @@ struct LocusUpdateApp: App {
 
         // Menu bar summary: "LU ✓" when clean, "LU N" when N outdated apps.
         MenuBarExtra {
-            menuBarContent
+            MenuBarMenu()
+                .environmentObject(appState)
                 .onAppear { appState.ensureBackgroundLoopStarted() }
         } label: {
             Text("LU \(appState.menuBarLabel)")
         }
         .menuBarExtraStyle(.menu)
     }
+}
 
-    @ViewBuilder
-    private var menuBarContent: some View {
+private struct MenuBarMenu: View {
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.openWindow) private var openWindow
+
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter
+    }()
+
+    var body: some View {
         Text(appState.outdatedCount == 0
              ? "All checked apps up to date"
              : "\(appState.outdatedCount) outdated")
         if let check = appState.lastCheckDate {
-            Text("Checked \(check, style: .relative) ago")
+            Text("Checked \(Self.relativeFormatter.localizedString(for: check, relativeTo: Date()))")
                 .font(.caption)
         }
         Divider()
@@ -54,7 +65,7 @@ struct LocusUpdateApp: App {
             Button("\(status.app.name) \(status.app.shortVersion) → \(status.remote?.version ?? "?")") {
                 appState.openUpdatePage(for: status)
             }
-            .disabled(status.remote?.infoURL == nil)
+            .disabled(status.remote?.browserURL == nil)
         }
         if appState.outdatedCount > 12 {
             Text("…and \(appState.outdatedCount - 12) more")
@@ -63,13 +74,10 @@ struct LocusUpdateApp: App {
         Button("Scan & Check Now") {
             Task { await appState.runScanAndCheck(reason: "menu") }
         }
-        .disabled(appState.isScanning || appState.isChecking)
+        .disabled(appState.isWorking)
         Button("Open LocusUpdate") {
             NSApp.activate(ignoringOtherApps: true)
-            for window in NSApp.windows where window.canBecomeKey {
-                window.makeKeyAndOrderFront(nil)
-                break
-            }
+            openWindow(id: "main")
         }
         SettingsLink {
             Text("Settings…")
